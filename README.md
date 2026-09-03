@@ -94,6 +94,8 @@ Worker 启动后，会持续轮询该 Environment 的 Work Queue。每个 Sessio
 4. 本地 Worker 领取 Work Item，在 Session 子目录执行工具。
 5. Worker 回传 Tool Result，方舟继续推理直至 Session 到达终态。
 
+如果方舟在等待本地 Tool Result 时短暂返回 `session.status_idle`，页面会显示“等待本地工具结果”并继续拉取事件；只有不存在尚未回传的 Tool Use 时，才将该状态视为本轮结束。
+
 推荐先测试：
 
 ```text

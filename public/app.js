@@ -113,11 +113,19 @@ function sessionTime(session) {
 
 function eventPresentation(event) {
   const tool = event.toolName ? ` · ${event.toolName}` : "";
+  if (event.type === "session.status_idle" && event.waitingForToolResult) {
+    return {
+      label: "等待本地工具结果",
+      detail: `仍有 ${event.outstandingToolUses || 1} 个 Tool Use 未回传`,
+      error: false,
+    };
+  }
   const labels = {
     "session.created": "Session 已创建",
     "session.status_running": "Session 开始运行",
     "agent.tool_use": `方舟发起工具调用${tool}`,
     "user.tool_result": `本地 Worker 已回传工具结果${tool}`,
+    "session.thread_status_idle": "模型线程等待工具结果",
     "session.status_idle": "Session 已完成",
     "session.status_terminated": "Session 已终止",
     "session.error": "Session 执行失败",

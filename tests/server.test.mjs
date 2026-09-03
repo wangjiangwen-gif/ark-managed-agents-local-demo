@@ -268,3 +268,52 @@ test("chat preserves upstream Session error details for live observation", async
     });
   });
 });
+
+test("chat ignores intermediate idle while a Tool Use is awaiting its result", async () => {
+  let eventPoll = 0;
+  await withUpstream((request, response) => {
+    if (request.url === "/sessions" && request.method === "POST") return json(response, { id: "session-tools" });
+    if (request.url === "/sessions/session-tools/events" && request.method === "POST") return json(response, { data: [] });
+    if (request.url === "/sessions/session-tools/events?limit=100" && request.method === "GET") {
+      eventPoll += 1;
+      if (eventPoll === 1) {
+        return json(response, { data: [
+          { id: "call-1", type: "agent.tool_use", name: "bash" },
+          { id: "idle-early", type: "session.status_idle" },
+        ] });
+      }
+      return json(response, { data: [
+        { id: "call-1", type: "agent.tool_use", name: "bash" },
+        { id: "idle-early", type: "session.status_idle" },
+        { id: "result-1", type: "user.tool_result", tool_use_id: "call-1", content: [{ type: "text", text: "exit_code: 0" }] },
+        { id: "message-1", type: "agent.message", content: [{ type: "text", text: "文件已生成" }] },
+        { id: "idle-final", type: "session.status_idle" },
+      ] });
+    }
+    json(response, { message: "unexpected" }, 404);
+  }, async (upstream) => {
+    const state = createState();
+    state.apiKey = "test-key";
+    state.baseUrl = upstream;
+    state.agent = { id: "agent-1", version: 1 };
+    state.environment = { id: "env-1" };
+    state.worker = { exitCode: null, kill() { this.exitCode = 0; } };
+    state.workdir = "/tmp/ark-local-demo-test-tools";
+    await withServer(state, async (base) => {
+      const response = await fetch(`${base}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "创建文件" }),
+      });
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.equal(eventPoll, 2);
+      assert.equal(payload.terminal, "session.status_idle");
+      assert.equal(payload.reply, "文件已生成");
+      const session = (await (await fetch(`${base}/api/state`)).json()).sessions[0];
+      const earlyIdle = session.events.find((event) => event.id === "idle-early");
+      assert.equal(earlyIdle.waitingForToolResult, true);
+      assert.equal(session.events.at(-1).id, "idle-final");
+    });
+  });
+});

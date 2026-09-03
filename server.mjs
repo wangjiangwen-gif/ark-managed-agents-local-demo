@@ -49,7 +49,7 @@ function publicState(state) {
   };
 }
 
-function observedEvent(event) {
+function observedEvent(event, annotations = {}) {
   const text = eventText(event).trim();
   const errorMessage = event?.error?.message || event?.message || event?.data?.error?.message || "";
   return {
@@ -61,6 +61,7 @@ function observedEvent(event) {
     ...((event.name || event?.tool?.name || event?.data?.name) ? { toolName: event.name || event.tool?.name || event.data?.name } : {}),
     ...(typeof event.is_error === "boolean" ? { isError: event.is_error } : {}),
     ...(errorMessage ? { error: String(errorMessage) } : {}),
+    ...annotations,
   };
 }
 
@@ -342,6 +343,7 @@ async function runTurn(state, message) {
   });
 
   const seen = new Set();
+  const outstandingToolUses = new Set();
   const replies = [];
   const started = Date.now();
   while (Date.now() - started < 180_000) {
@@ -350,14 +352,27 @@ async function runTurn(state, message) {
       const key = event.id || `${event.type}:${event.processed_at || ""}:${JSON.stringify(event.content || event)}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      if (event.type === "agent.tool_use") {
+        const toolUseId = event.tool_use_id || event.id;
+        if (toolUseId) outstandingToolUses.add(toolUseId);
+      }
+      if (event.type === "user.tool_result" && event.tool_use_id) {
+        outstandingToolUses.delete(event.tool_use_id);
+      }
+      const waitingForToolResult = event.type === "session.status_idle" && outstandingToolUses.size > 0;
+      const observation = observedEvent(event, waitingForToolResult ? {
+        waitingForToolResult: true,
+        outstandingToolUses: outstandingToolUses.size,
+      } : {});
       const current = state.sessions.find((item) => item.id === created.id);
-      updateSession(state, created.id, { events: [...(current?.events || []), observedEvent(event)] });
-      emit(state, "session-event", { sessionId: created.id, event: observedEvent(event) });
+      updateSession(state, created.id, { events: [...(current?.events || []), observation] });
+      emit(state, "session-event", { sessionId: created.id, event: observation });
       if (event.type === "agent.message") {
         const text = eventText(event).trim();
         if (text) replies.push(text);
       }
       if (TERMINAL_EVENTS.has(event.type)) {
+        if (waitingForToolResult) continue;
         const artifacts = await listArtifacts(state.workdir);
         updateSession(state, created.id, {
           status: event.type,
