@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>方舟 Managed Agents · 本地电脑体验</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+  <main class="shell">
+    <header class="hero">
+      <div class="brand"><span class="brand-mark">MA</span><span>火山方舟 Managed Agents</span></div>
+      <div class="hero-grid">
+        <div>
+          <p class="eyebrow">LOCAL COMPUTER QUICKSTART</p>
+          <h1>让云端 Agent<br>在你的电脑上工作</h1>
+          <p class="lead">方舟负责模型推理和 Session 编排，本地 Worker 负责执行 Bash 与文件操作。全程只需本机主动出站连接。</p>
+        </div>
+        <div class="architecture">
+          <div class="arch-node cloud"><span>☁</span><strong>方舟云端</strong><small>Agent · Session · Work Queue</small></div>
+          <div class="arch-flow"><i></i><em>HTTPS</em><i></i></div>
+          <div class="arch-node local"><span>⌘</span><strong>本地电脑</strong><small>Worker · 文件系统</small></div>
+        </div>
+      </div>
+    </header>
+
+    <nav class="stepper" aria-label="体验步骤">
+      <button data-jump="1" class="step active"><b>1</b><span>连接方舟<small>验证 API Key</small></span></button>
+      <button data-jump="2" class="step"><b>2</b><span>初始化资源<small>Agent + Environment</small></span></button>
+      <button data-jump="3" class="step"><b>3</b><span>连接电脑<small>启动本地 Worker</small></span></button>
+      <button data-jump="4" class="step"><b>4</b><span>开始体验<small>创建 Session</small></span></button>
+    </nav>
+
+    <section id="step-1" class="panel">
+      <div class="panel-index">01</div>
+      <div class="panel-main">
+        <p class="kicker">连接方舟</p>
+        <h2>填写 API Key</h2>
+        <p class="muted">密钥只保存在当前本地进程内存中，刷新页面不会丢失，关闭服务后立即清除。</p>
+        <form id="config-form" class="form-stack">
+          <label>方舟 API Key
+            <div class="secret-input"><input id="api-key" type="password" autocomplete="off" placeholder="ark-••••••••••••" required><button type="button" id="toggle-key">显示</button></div>
+          </label>
+          <details>
+            <summary>高级设置</summary>
+            <div class="advanced-grid">
+              <label>Base URL<input id="base-url" value="https://ark.cn-beijing.volces.com/api/v3"></label>
+              <label>模型 ID<input id="model-id" value="doubao-seed-2-1-turbo-260628"></label>
+            </div>
+          </details>
+          <div class="actions"><button class="primary" type="submit">验证并继续 <span>→</span></button><span id="config-status" class="status"></span></div>
+        </form>
+      </div>
+    </section>
+
+    <section id="step-2" class="panel locked">
+      <div class="panel-index">02</div>
+      <div class="panel-main">
+        <p class="kicker">初始化资源</p>
+        <h2>一键准备云端 Agent</h2>
+        <p class="muted">创建一个支持 Bash 的通用 Agent，以及一个只负责路由本地任务的 Self-hosted Environment。</p>
+        <div class="resource-grid">
+          <article class="resource-card"><span class="resource-icon purple">A</span><div><strong>通用 Agent</strong><small>模型推理 · Tool Use · Session 编排</small><code id="agent-id">等待创建</code></div></article>
+          <article class="resource-card"><span class="resource-icon orange">E</span><div><strong>Self-hosted Environment</strong><small>Work Queue · 租约 · Worker 路由</small><code id="environment-id">等待创建</code></div></article>
+        </div>
+        <div class="actions"><button id="provision" class="primary">一键初始化 <span>→</span></button><span id="provision-status" class="status"></span></div>
+      </div>
+    </section>
+
+    <section id="step-3" class="panel locked">
+      <div class="panel-index">03</div>
+      <div class="panel-main">
+        <p class="kicker">连接本地电脑</p>
+        <h2>把一个文件夹交给 Agent</h2>
+        <p class="muted">Agent 只能在你选择的目录中创建和修改文件。Worker 由本机主动轮询方舟，不需要开放入站端口。</p>
+        <div class="directory-box">
+          <div><span class="folder">⌑</span><div><strong id="directory-name">尚未选择目录</strong><code id="directory-path">选择一个空目录或专用测试目录</code></div></div>
+          <button id="choose-directory" class="secondary">选择文件夹</button>
+        </div>
+        <div class="worker-row">
+          <div class="worker-health"><span id="worker-dot" class="dot"></span><div><strong id="worker-title">Worker 未启动</strong><small id="worker-subtitle">选择目录后启动</small></div></div>
+          <button id="start-worker" class="primary" disabled>启动 Worker</button>
+        </div>
+        <details class="logs"><summary>查看本地运行日志</summary><pre id="worker-logs">等待 Worker 启动…</pre></details>
+      </div>
+    </section>
+
+    <section id="step-4" class="panel locked chat-panel">
+      <div class="panel-index">04</div>
+      <div class="panel-main">
+        <p class="kicker">对话体验</p>
+        <h2>给本地 Agent 一个任务</h2>
+        <p class="muted">每次发送都会创建一个新的 Session。方舟生成 Tool Use，本地 Worker 执行并把结果返回云端。</p>
+        <div id="session-history" class="session-history hidden">
+          <div class="session-history-head"><strong>最近运行</strong><small>刷新页面后仍可查看</small></div>
+          <div id="session-list" class="session-list"></div>
+        </div>
+        <div class="suggestions">
+          <button>写一份单页 HTML PPT，介绍 Managed Agents 如何落在本地文件系统，并保存为 ma-local.html</button>
+          <button>分析当前目录结构，生成一份 README.md，说明每个文件的用途</button>
+          <button>创建一个精致的 todo.html，本地保存且可以直接双击使用</button>
+        </div>
+        <div id="conversation" class="conversation empty"><div class="empty-chat"><span>✦</span><p>选择一个示例，或输入你自己的任务</p></div></div>
+        <form id="chat-form" class="composer">
+          <textarea id="message" rows="2" placeholder="让 Agent 在本地目录完成一项任务…"></textarea>
+          <button class="send" type="submit" aria-label="发送">↑</button>
+        </form>
+        <div id="artifacts" class="artifacts hidden"><div class="artifacts-head"><strong>本地产物</strong><button id="refresh-artifacts">刷新</button></div><div id="artifact-list"></div></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

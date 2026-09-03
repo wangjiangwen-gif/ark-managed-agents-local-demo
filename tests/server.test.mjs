@@ -1,0 +1,195 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import http from "node:http";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createDemoServer, createState, safeArtifactPath } from "../server.mjs";
+
+const TEST_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+
+async function withServer(state, run) {
+  const { server } = createDemoServer({ state });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try { await run(base); } finally { await new Promise((resolve) => server.close(resolve)); }
+}
+
+async function withUpstream(handler, run) {
+  const server = http.createServer(handler);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try { await run(base); } finally { await new Promise((resolve) => server.close(resolve)); }
+}
+
+function json(response, data, status = 200) {
+  response.writeHead(status, { "Content-Type": "application/json" });
+  response.end(JSON.stringify(data));
+}
+
+test("health endpoint responds without configuration", async () => {
+  await withServer(createState(), async (base) => {
+    const response = await fetch(`${base}/api/health`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
+  });
+});
+
+test("page includes refresh-restorable Session history UI", async () => {
+  const [html, script] = await Promise.all([
+    readFile(join(TEST_ROOT, "public", "index.html"), "utf8"),
+    readFile(join(TEST_ROOT, "public", "app.js"), "utf8"),
+  ]);
+  assert.match(html, /id="session-history"/);
+  assert.match(script, /renderSessionHistory\(state\.sessions\)/);
+  assert.match(script, /Session .* 个事件/);
+});
+
+test("public state never exposes API key", async () => {
+  const state = createState();
+  state.apiKey = "ark-super-secret";
+  await withServer(state, async (base) => {
+    const response = await fetch(`${base}/api/state`);
+    const text = await response.text();
+    assert.equal(response.status, 200);
+    assert.equal(text.includes("ark-super-secret"), false);
+    assert.equal(JSON.parse(text).configured, true);
+  });
+});
+
+test("public state restores recent Session observation without exposing credentials", async () => {
+  const state = createState({ sessions: [{
+    id: "session-old",
+    status: "session.status_idle",
+    message: "创建 HTML",
+    reply: "已完成",
+    events: [{ id: "evt-1", type: "agent.message", text: "已完成" }],
+    artifacts: [{ path: "session-old/demo.html", size: 12 }],
+  }] });
+  state.apiKey = "ark-private";
+  await withServer(state, async (base) => {
+    const response = await fetch(`${base}/api/state`);
+    const payload = await response.json();
+    assert.equal(payload.session.id, "session-old");
+    assert.equal(payload.sessions[0].message, "创建 HTML");
+    assert.equal(JSON.stringify(payload).includes("ark-private"), false);
+
+    const detail = await fetch(`${base}/api/sessions/session-old`);
+    assert.equal(detail.status, 200);
+    assert.equal((await detail.json()).data.reply, "已完成");
+  });
+});
+
+test("configuration rejects an empty API key before network access", async () => {
+  await withServer(createState(), async (base) => {
+    const response = await fetch(`${base}/api/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: "" }),
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /不能为空/);
+  });
+});
+
+test("artifact path rejects traversal and accepts a child path", () => {
+  assert.throws(() => safeArtifactPath("/tmp/demo-root", "../secret"), /非法文件路径/);
+  assert.equal(safeArtifactPath("/tmp/demo-root", "slides/demo.html"), "/tmp/demo-root/slides/demo.html");
+});
+
+test("worker cannot start before environment and directory exist", async () => {
+  const state = createState();
+  state.apiKey = "test";
+  await withServer(state, async (base) => {
+    const response = await fetch(`${base}/api/worker/start`, { method: "POST" });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /Environment/);
+  });
+});
+
+test("provision creates Agent first and then self-hosted Environment", async () => {
+  const calls = [];
+  await withUpstream((request, response) => {
+    calls.push(`${request.method} ${request.url}`);
+    assert.equal(request.headers.authorization, "Bearer test-key");
+    if (request.url === "/agents" && request.method === "POST") {
+      return json(response, { id: "agent-1", version: 1, name: "demo-agent" });
+    }
+    if (request.url === "/environments" && request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      return request.on("end", () => {
+        assert.equal(JSON.parse(body).config.type, "self_hosted");
+        json(response, { id: "env-1", name: "demo-env", config: { type: "self_hosted" } });
+      });
+    }
+    json(response, { message: "unexpected" }, 404);
+  }, async (upstream) => {
+    const state = createState();
+    state.apiKey = "test-key";
+    state.baseUrl = upstream;
+    await withServer(state, async (base) => {
+      const response = await fetch(`${base}/api/provision`, { method: "POST" });
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.equal(payload.state.agent.id, "agent-1");
+      assert.equal(payload.state.environment.id, "env-1");
+    });
+  });
+  assert.deepEqual(calls, ["POST /agents", "POST /environments"]);
+});
+
+test("chat creates Session, sends user.message and waits for idle", async () => {
+  const calls = [];
+  await withUpstream((request, response) => {
+    calls.push(`${request.method} ${request.url}`);
+    if (request.url === "/sessions" && request.method === "POST") {
+      return json(response, { id: "session-1" });
+    }
+    if (request.url === "/sessions/session-1/events" && request.method === "POST") {
+      return json(response, { data: [] });
+    }
+    if (request.url === "/sessions/session-1/events?limit=100" && request.method === "GET") {
+      return json(response, { data: [
+        { id: "evt-1", type: "agent.message", content: [{ type: "text", text: "已在本地创建 ma-local.html" }] },
+        { id: "evt-2", type: "session.status_idle" },
+      ] });
+    }
+    json(response, { message: "unexpected" }, 404);
+  }, async (upstream) => {
+    const state = createState();
+    state.apiKey = "test-key";
+    state.baseUrl = upstream;
+    state.agent = { id: "agent-1", version: 1 };
+    state.environment = { id: "env-1" };
+    state.worker = { exitCode: null, kill() { this.exitCode = 0; } };
+    state.workdir = "/tmp/ark-local-demo-test-empty";
+    await withServer(state, async (base) => {
+      const response = await fetch(`${base}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "创建 HTML" }),
+      });
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.equal(payload.sessionId, "session-1");
+      assert.equal(payload.terminal, "session.status_idle");
+      assert.match(payload.reply, /ma-local\.html/);
+      const statePayload = await (await fetch(`${base}/api/state`)).json();
+      assert.equal(statePayload.sessions[0].id, "session-1");
+      assert.equal(statePayload.sessions[0].message, "创建 HTML");
+      assert.equal(statePayload.sessions[0].status, "session.status_idle");
+      assert.match(statePayload.sessions[0].reply, /ma-local\.html/);
+      assert.deepEqual(statePayload.sessions[0].events.map((event) => event.type), [
+        "user.message",
+        "agent.message",
+        "session.status_idle",
+      ]);
+    });
+  });
+  assert.deepEqual(calls, [
+    "POST /sessions",
+    "POST /sessions/session-1/events",
+    "GET /sessions/session-1/events?limit=100",
+  ]);
+});
