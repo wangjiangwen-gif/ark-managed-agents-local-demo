@@ -21,8 +21,12 @@ button { cursor: pointer; }
 .ambient-two { background: #82e8ca; right: -16rem; top: 18rem; }
 .shell { position: relative; width: min(1100px, calc(100% - 40px)); margin: 0 auto; padding: 42px 0 100px; }
 .hero { padding: 14px 12px 44px; }
-.brand { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 650; color: #344054; }
+.brand { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 14px; font-weight: 650; color: #344054; }
+.brand > div { display: flex; align-items: center; gap: 10px; }
 .brand-mark { display: grid; place-items: center; width: 32px; height: 32px; color: white; border-radius: 10px; background: linear-gradient(145deg, #7b61ff, #4e52e8); font-size: 11px; box-shadow: 0 8px 22px rgba(91,92,246,.24); }
+.restart-demo { padding: 8px 12px; border: 1px solid #d9dde7; border-radius: 10px; color: #475467; background: rgba(255,255,255,.72); font-size: 11px; font-weight: 650; }
+.restart-demo:hover { color: #4f46e5; border-color: #a8a3ff; background: white; }
+.restart-demo:disabled { cursor: wait; opacity: .6; }
 .hero-grid { display: grid; grid-template-columns: 1.1fr .9fr; align-items: end; gap: 70px; padding-top: 54px; }
 .eyebrow, .kicker { color: var(--primary); letter-spacing: .12em; font-size: 12px; font-weight: 800; }
 h1 { font-size: clamp(42px, 6vw, 68px); line-height: 1.02; letter-spacing: -.055em; margin: 12px 0 22px; }

@@ -42,12 +42,41 @@ test("page includes in-process Session history, live timeline and visible compos
     readFile(join(TEST_ROOT, "public", "styles.css"), "utf8"),
   ]);
   assert.match(html, /id="session-history"/);
+  assert.match(html, /id="restart-demo"/);
   assert.match(html, /当前服务进程内保留/);
   assert.match(script, /renderSessionHistory\(state\.sessions\)/);
   assert.match(script, /renderEventTimeline\(session\.events\)/);
+  assert.match(script, /waitForRestart\(\)/);
   assert.match(script, /Session .* 个事件/);
   assert.match(styles, /\.composer \{ position: sticky;/);
   assert.match(styles, /grid-template-columns: minmax\(0, 1fr\) 44px/);
+});
+
+test("restart endpoint stops Worker and invokes supervised restart", async () => {
+  const state = createState();
+  let stopped = false;
+  state.worker = { exitCode: null, kill(signal) { stopped = signal === "SIGTERM"; this.exitCode = 0; } };
+  let restarted = false;
+  const { server } = createDemoServer({ state, onRestart: () => { restarted = true; } });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const response = await fetch(`${base}/api/restart`, { method: "POST" });
+    assert.equal(response.status, 202);
+    assert.equal(stopped, true);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(restarted, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("restart endpoint explains that start.sh supervision is required", async () => {
+  await withServer(createState(), async (base) => {
+    const response = await fetch(`${base}/api/restart`, { method: "POST" });
+    assert.equal(response.status, 409);
+    assert.match((await response.json()).error, /start\.sh/);
+  });
 });
 
 test("public state never exposes API key", async () => {

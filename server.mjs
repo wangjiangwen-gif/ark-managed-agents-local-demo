@@ -398,7 +398,7 @@ async function serveStatic(response, pathname) {
   response.end(data);
 }
 
-export function createDemoServer({ state = createState() } = {}) {
+export function createDemoServer({ state = createState(), onRestart = null } = {}) {
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     try {
@@ -469,6 +469,13 @@ export function createDemoServer({ state = createState() } = {}) {
         await stopWorker(state);
         return sendJson(response, 200, { ok: true });
       }
+      if (request.method === "POST" && url.pathname === "/api/restart") {
+        if (!onRestart) throw Object.assign(new Error("请使用 ./start.sh 启动 Demo，才能在页面内重启服务"), { status: 409 });
+        await stopWorker(state);
+        sendJson(response, 202, { ok: true, message: "本地服务正在重新启动" });
+        if (onRestart) setTimeout(() => onRestart(), 80);
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/api/chat") {
         const body = await jsonBody(request);
         const message = String(body.message || "").trim();
@@ -523,7 +530,8 @@ function isMain() {
 
 if (isMain()) {
   const port = Number(process.env.PORT || 4173);
-  const { server } = createDemoServer();
+  const supervised = process.env.ARK_DEMO_SUPERVISED === "1";
+  const { server } = createDemoServer({ onRestart: supervised ? () => process.exit(75) : null });
   server.listen(port, "127.0.0.1", () => {
     const url = `http://127.0.0.1:${port}`;
     console.log(`\n方舟 Managed Agents · 本地电脑 Demo 已启动：${url}\n`);

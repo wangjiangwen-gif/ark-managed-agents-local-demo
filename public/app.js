@@ -27,6 +27,21 @@ function toast(message) {
   toastTimer = setTimeout(() => element.classList.remove("show"), 3200);
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForRestart() {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await delay(250);
+    try {
+      const response = await fetch("/api/health", { cache: "no-store" });
+      if (response.ok) return;
+    } catch {}
+  }
+  throw new Error("服务重启超时，请在终端重新运行 ./start.sh");
+}
+
 function setStatus(selector, text, kind = "") {
   const element = $(selector);
   element.textContent = text;
@@ -250,6 +265,23 @@ $("#toggle-key").addEventListener("click", () => {
   const input = $("#api-key");
   input.type = input.type === "password" ? "text" : "password";
   $("#toggle-key").textContent = input.type === "password" ? "显示" : "隐藏";
+});
+
+$("#restart-demo").addEventListener("click", async (event) => {
+  if (!window.confirm("将停止当前 Worker、清空 API Key 和会话记录，并从第一步重新开始。是否继续？")) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "正在重启…";
+  try {
+    await api("/api/restart", { method: "POST" });
+    await delay(350);
+    await waitForRestart();
+    window.location.reload();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "重新开始";
+    toast(error.message);
+  }
 });
 
 $("#config-form").addEventListener("submit", async (event) => {
