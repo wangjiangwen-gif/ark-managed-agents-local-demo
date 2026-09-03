@@ -35,14 +35,19 @@ test("health endpoint responds without configuration", async () => {
   });
 });
 
-test("page includes refresh-restorable Session history UI", async () => {
-  const [html, script] = await Promise.all([
+test("page includes in-process Session history, live timeline and visible composer", async () => {
+  const [html, script, styles] = await Promise.all([
     readFile(join(TEST_ROOT, "public", "index.html"), "utf8"),
     readFile(join(TEST_ROOT, "public", "app.js"), "utf8"),
+    readFile(join(TEST_ROOT, "public", "styles.css"), "utf8"),
   ]);
   assert.match(html, /id="session-history"/);
+  assert.match(html, /当前服务进程内保留/);
   assert.match(script, /renderSessionHistory\(state\.sessions\)/);
+  assert.match(script, /renderEventTimeline\(session\.events\)/);
   assert.match(script, /Session .* 个事件/);
+  assert.match(styles, /\.composer \{ position: sticky;/);
+  assert.match(styles, /grid-template-columns: minmax\(0, 1fr\) 44px/);
 });
 
 test("public state never exposes API key", async () => {
@@ -192,4 +197,45 @@ test("chat creates Session, sends user.message and waits for idle", async () => 
     "POST /sessions/session-1/events",
     "GET /sessions/session-1/events?limit=100",
   ]);
+});
+
+test("chat preserves upstream Session error details for live observation", async () => {
+  await withUpstream((request, response) => {
+    if (request.url === "/sessions" && request.method === "POST") {
+      return json(response, { id: "session-error" });
+    }
+    if (request.url === "/sessions/session-error/events" && request.method === "POST") {
+      return json(response, { data: [] });
+    }
+    if (request.url === "/sessions/session-error/events?limit=100" && request.method === "GET") {
+      return json(response, { data: [{
+        id: "evt-error",
+        type: "session.error",
+        processed_at: "2026-09-03T05:00:00Z",
+        error: { message: "工具结果处理失败" },
+      }] });
+    }
+    json(response, { message: "unexpected" }, 404);
+  }, async (upstream) => {
+    const state = createState();
+    state.apiKey = "test-key";
+    state.baseUrl = upstream;
+    state.agent = { id: "agent-1", version: 1 };
+    state.environment = { id: "env-1" };
+    state.worker = { exitCode: null, kill() { this.exitCode = 0; } };
+    state.workdir = "/tmp/ark-local-demo-test-error";
+    await withServer(state, async (base) => {
+      const response = await fetch(`${base}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "触发错误" }),
+      });
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.equal(payload.terminal, "session.error");
+      const observed = (await (await fetch(`${base}/api/state`)).json()).sessions[0];
+      assert.equal(observed.status, "session.error");
+      assert.equal(observed.events.at(-1).error, "工具结果处理失败");
+    });
+  });
 });

@@ -85,6 +85,8 @@ function sessionStatusLabel(status) {
     "session.status_idle": "已完成",
     "session.status_terminated": "已终止",
     "session.error": "失败",
+    client_error: "连接失败",
+    worker_error: "Worker 异常",
     timed_out: "观测超时",
   })[status] || status || "未知";
 }
@@ -92,6 +94,47 @@ function sessionStatusLabel(status) {
 function sessionTime(session) {
   const value = session.completedAt || session.updatedAt || session.createdAt;
   return value ? new Date(value).toLocaleTimeString("zh-CN", { hour12: false }) : "";
+}
+
+function eventPresentation(event) {
+  const tool = event.toolName ? ` · ${event.toolName}` : "";
+  const labels = {
+    "session.created": "Session 已创建",
+    "session.status_running": "Session 开始运行",
+    "agent.tool_use": `方舟发起工具调用${tool}`,
+    "user.tool_result": `本地 Worker 已回传工具结果${tool}`,
+    "session.status_idle": "Session 已完成",
+    "session.status_terminated": "Session 已终止",
+    "session.error": "Session 执行失败",
+    "client.error": "方舟 API 或网络请求失败",
+    "worker.error": "本地 Worker 异常退出",
+  };
+  const label = labels[event.type] || event.type;
+  const detail = event.error || (event.isError ? event.text || "工具执行失败" : "");
+  return { label, detail, error: event.type === "session.error" || event.type?.endsWith(".error") || event.isError === true };
+}
+
+function renderEventTimeline(events) {
+  const visible = (events || []).filter((event) => !["user.message", "agent.message"].includes(event.type));
+  if (!visible.length) return;
+  const timeline = document.createElement("div");
+  timeline.className = "session-timeline";
+  for (const event of visible) {
+    const view = eventPresentation(event);
+    const item = document.createElement("div");
+    item.className = `timeline-item${view.error ? " error" : ""}`;
+    const marker = document.createElement("i");
+    const body = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = view.label;
+    const meta = document.createElement("small");
+    const time = event.at ? new Date(event.at).toLocaleTimeString("zh-CN", { hour12: false }) : "";
+    meta.textContent = [time, view.detail].filter(Boolean).join(" · ");
+    body.append(label, meta);
+    item.append(marker, body);
+    timeline.appendChild(item);
+  }
+  $("#conversation").appendChild(timeline);
 }
 
 function renderSession(session) {
@@ -105,12 +148,14 @@ function renderSession(session) {
   }
   conversation.className = "conversation";
   if (session.message) bubble("user", session.message);
+  renderEventTimeline(session.events);
   if (session.reply) {
     bubble("agent", session.reply);
   } else if (session.status === "running") {
     bubble("agent", "方舟正在编排，本地 Worker 正在执行", "loading");
   } else {
-    bubble("agent", session.status === "session.error" ? "Session 执行失败，请结合事件与 Worker 日志排查。" : "Session 已结束，但没有返回文本。");
+    const failed = ["session.error", "client_error", "worker_error"].includes(session.status);
+    bubble("agent", failed ? "Session 执行失败，请查看下方错误事件与 Worker 日志。" : "Session 已结束，但没有返回文本。");
   }
   const eventCount = Array.isArray(session.events) ? session.events.length : 0;
   bubble("system", `Session ${session.id} · ${sessionStatusLabel(session.status)} · ${eventCount} 个事件`);
@@ -304,8 +349,10 @@ const stream = new EventSource("/api/events");
 stream.addEventListener("state", (event) => renderState(JSON.parse(event.data).payload));
 stream.addEventListener("log", (event) => appendLog(JSON.parse(event.data)));
 stream.addEventListener("session-event", (event) => {
-  const type = JSON.parse(event.data).payload.type;
+  const payload = JSON.parse(event.data).payload;
+  const type = payload.event?.type;
   if (type === "agent.tool_use") $(".bubble.loading")?.replaceChildren(document.createTextNode("本地 Worker 正在执行工具调用"));
+  if (type === "session.error") $(".bubble.loading")?.replaceChildren(document.createTextNode(payload.event?.error || "Session 执行失败"));
 });
 stream.onerror = () => toast("与本地服务的状态连接暂时中断");
 

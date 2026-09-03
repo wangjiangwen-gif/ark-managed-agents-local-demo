@@ -1,5 +1,5 @@
 import http from "node:http";
-import { readFile, readdir, stat, mkdir, writeFile, rename } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { spawn } from "node:child_process";
 import { dirname, extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
@@ -12,7 +12,7 @@ const DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 const DEFAULT_MODEL_ID = "doubao-seed-2-1-turbo-260628";
 const TERMINAL_EVENTS = new Set(["session.status_idle", "session.status_terminated", "session.error"]);
 
-export function createState({ sessions = [], historyPath = null } = {}) {
+export function createState({ sessions = [] } = {}) {
   return {
     apiKey: "",
     baseUrl: DEFAULT_BASE_URL,
@@ -25,7 +25,6 @@ export function createState({ sessions = [], historyPath = null } = {}) {
     workerExit: null,
     session: sessions[0] || null,
     sessions,
-    historyPath,
     logs: [],
     clients: new Set(),
   };
@@ -50,33 +49,18 @@ function publicState(state) {
   };
 }
 
-async function persistSessions(state) {
-  if (!state.historyPath) return;
-  await mkdir(dirname(state.historyPath), { recursive: true });
-  const temporary = `${state.historyPath}.${process.pid}.tmp`;
-  await writeFile(temporary, JSON.stringify({ sessions: state.sessions.slice(0, 20) }, null, 2), { mode: 0o600 });
-  await rename(temporary, state.historyPath);
-}
-
-async function loadSessions(historyPath) {
-  try {
-    const payload = JSON.parse(await readFile(historyPath, "utf8"));
-    return Array.isArray(payload?.sessions) ? payload.sessions.slice(0, 20) : [];
-  } catch {
-    return [];
-  }
-}
-
 function observedEvent(event) {
   const text = eventText(event).trim();
+  const errorMessage = event?.error?.message || event?.message || event?.data?.error?.message || "";
   return {
     id: event.id || null,
     type: event.type || "unknown",
     at: event.processed_at || event.created_at || new Date().toISOString(),
     ...(text ? { text } : {}),
     ...(event.tool_use_id ? { toolUseId: event.tool_use_id } : {}),
-    ...(event.name ? { toolName: event.name } : {}),
+    ...((event.name || event?.tool?.name || event?.data?.name) ? { toolName: event.name || event.tool?.name || event.data?.name } : {}),
     ...(typeof event.is_error === "boolean" ? { isError: event.is_error } : {}),
+    ...(errorMessage ? { error: String(errorMessage) } : {}),
   };
 }
 
@@ -88,7 +72,6 @@ function updateSession(state, id, changes) {
   state.sessions.unshift(next);
   state.sessions = state.sessions.slice(0, 20);
   state.session = next;
-  void persistSessions(state).catch((error) => emit(state, "log", { source: "server", level: "error", text: `Session 观测记录保存失败：${error.message}` }));
   emit(state, "state", publicState(state));
   return next;
 }
@@ -286,6 +269,14 @@ async function startWorker(state) {
   worker.on("error", (error) => emit(state, "log", { source: "worker", level: "error", text: error.message }));
   worker.on("close", (code, signal) => {
     state.workerExit = { code, signal, at: new Date().toISOString() };
+    if (state.session?.status === "running") {
+      const message = `Worker 意外退出（code=${code ?? "-"}, signal=${signal ?? "-"}）`;
+      updateSession(state, state.session.id, {
+        status: "worker_error",
+        terminal: "worker_error",
+        events: [...(state.session.events || []), { type: "worker.error", at: new Date().toISOString(), error: message }],
+      });
+    }
     emit(state, "state", publicState(state));
     emit(state, "log", { source: "worker", text: `Worker 已退出（code=${code ?? "-"}, signal=${signal ?? "-"}）` });
   });
@@ -361,7 +352,7 @@ async function runTurn(state, message) {
       seen.add(key);
       const current = state.sessions.find((item) => item.id === created.id);
       updateSession(state, created.id, { events: [...(current?.events || []), observedEvent(event)] });
-      emit(state, "session-event", { type: event.type, id: event.id || null });
+      emit(state, "session-event", { sessionId: created.id, event: observedEvent(event) });
       if (event.type === "agent.message") {
         const text = eventText(event).trim();
         if (text) replies.push(text);
@@ -503,6 +494,17 @@ export function createDemoServer({ state = createState() } = {}) {
       sendJson(response, 404, { error: "Not found" });
     } catch (error) {
       const status = Number(error.status) || 500;
+      if (request.method === "POST" && url.pathname === "/api/chat" && state.session?.status === "running") {
+        updateSession(state, state.session.id, {
+          status: "client_error",
+          terminal: "client_error",
+          events: [...(state.session.events || []), {
+            type: "client.error",
+            at: new Date().toISOString(),
+            error: redact(error.message, state.apiKey),
+          }],
+        });
+      }
       emit(state, "log", { source: "server", level: "error", text: redact(error.message, state.apiKey) });
       sendJson(response, status, {
         error: redact(error.message, state.apiKey),
@@ -521,9 +523,7 @@ function isMain() {
 
 if (isMain()) {
   const port = Number(process.env.PORT || 4173);
-  const historyPath = join(ROOT, ".data", "session-history.json");
-  const sessions = await loadSessions(historyPath);
-  const { server } = createDemoServer({ state: createState({ sessions, historyPath }) });
+  const { server } = createDemoServer();
   server.listen(port, "127.0.0.1", () => {
     const url = `http://127.0.0.1:${port}`;
     console.log(`\n方舟 Managed Agents · 本地电脑 Demo 已启动：${url}\n`);
